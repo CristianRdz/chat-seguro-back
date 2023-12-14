@@ -1,30 +1,40 @@
-import uuid
-import uvicorn
-import asyncio
-from datetime import datetime, timedelta
-from typing import Annotated
-from fastapi import Depends, FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from pymongo import MongoClient
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import RedirectResponse
+# Librerías estándar de Python
+import uuid  # Proporciona funcionalidades para trabajar con identificadores UUID (Universally Unique Identifier).
+import uvicorn  # Herramienta para ejecutar servidores ASGI (Asynchronous Server Gateway Interface).
+import asyncio  # Proporciona soporte para programación asíncrona en Python.
+from datetime import datetime, timedelta  # Funciones y tipos de datos para trabajar con fechas y tiempos.
 
-from models import Token, TokenData, User, UserInDB, Chat, ChatMessage
-from functions import *
-from constants import *
+# Tipos de datos
+from typing import Annotated  # Proporciona la capacidad de anotar tipos de datos, aunque es menos común y generalmente se usa con la librería `pydantic`.
 
+# FastAPI y sus dependencias
+from fastapi import Depends, FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect  # Importaciones relacionadas con el framework FastAPI, que se utiliza para construir APIs web.
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm  # Herramientas para la autenticación basada en OAuth2 en FastAPI.
+from jose import JWTError, jwt  # Librería para manejar tokens JSON Web en la autenticación.
+from passlib.context import CryptContext  # Proporciona herramientas para el manejo seguro de contraseñas.
+from fastapi.middleware.cors import CORSMiddleware  # Middleware para habilitar el soporte de CORS (Cross-Origin Resource Sharing) en FastAPI.
+from starlette.responses import RedirectResponse  # Utilizado para generar respuestas HTTP de redirección.
+
+# MongoDB y Motor (driver asincrónico para MongoDB)
+from pymongo import MongoClient  # Cliente para interactuar con MongoDB.
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase  # Cliente asincrónico para MongoDB.
+
+# Importaciones locales
+from models import Token, TokenData, User, UserInDB, Chat, ChatMessage  # Modelos de datos definidos para MongoDB, que representan las entidades de la aplicación.
+from functions import *  # Funciones definidas localmente, posiblemente utilidades específicas para la aplicación.
+from constants import *  # Constantes definidas localmente, posiblemente valores fijos utilizados en la aplicación.
+
+# Conexión a la base de datos MongoDB
 client = MongoClient(MONGO_URI)
 db = client["securityChat"]
 users = db["users"]
 chats = db["chats"]
 
+# Configuración de seguridad
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
+# Configuración de la aplicación FastAPI
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -36,14 +46,17 @@ app.add_middleware(
 
 
 def verify_password(plain_password, hashed_password):
+    # Verifica si la contraseña en texto plano coincide con la contraseña almacenada en formato hash
     return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password):
+    # Genera el hash de una contraseña en texto plano
     return pwd_context.hash(password)
 
 
 def get_userData(users, username: str):
+    # Obtiene datos del usuario por nombre de usuario
     pipeline = [
         {"$match": {"username": username}},
         {"$project": {"_id": 0}}
@@ -60,7 +73,8 @@ def get_userData(users, username: str):
 
 
 def get_user(users, username: str):
-    # email or username $or=[{"email": username}, {"username": username}]
+    # Obtiene un usuario por nombre de usuario o correo electrónico
+    #Trae la contraseña hash
     pipeline = [
         {"$match": {"$or": [{"email": username}, {"username": username}]}},
         {"$project": {"_id": 0}}
@@ -75,6 +89,7 @@ def get_user(users, username: str):
 
 
 def authenticate_user(users, username: str, password: str):
+    # Autentica al usuario por nombre de usuario y contraseña
     user = get_user(users, username)
     if not user:
         return False
@@ -84,6 +99,7 @@ def authenticate_user(users, username: str, password: str):
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    # Crea un token de acceso con información del usuario
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -95,6 +111,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
 
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
+    # Obtiene el usuario actual a partir del token de acceso
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -102,7 +119,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
+        username: str = payload.get("sub") #  nombre de usuario
         if username is None:
             raise credentials_exception
         token_data = TokenData(username=username)
@@ -115,6 +132,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
 
 
 def existChatBetween(chats, usernameFrom: str, usernameTo: str):
+    # Verifica si existe un chat entre dos usuarios
     pipeline = [
         {"$match": {"$or": [{"usernameFrom": usernameFrom, "usernameTo": usernameTo},
                             {"usernameFrom": usernameTo, "usernameTo": usernameFrom}]}},
@@ -132,12 +150,14 @@ def existChatBetween(chats, usernameFrom: str, usernameTo: str):
 async def get_current_active_user(
         current_user: Annotated[User, Depends(get_current_user)]
 ):
+    # Obtiene el usuario actual activo
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
 
 async def getUserByToken(token: str):
+    # Obtiene información del usuario a partir del token
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -157,6 +177,7 @@ async def getUserByToken(token: str):
 
 
 async def getKey(chats, _id: str):
+    # Obtiene la clave de cifrado de un chat
     result = chats.find_one({"_id": _id}, {"key": 1})
     if result:
         return int(result["key"])
@@ -168,6 +189,7 @@ async def getKey(chats, _id: str):
 async def login_for_access_token(
         form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ):
+    # Ruta para obtener un token de acceso
     user = authenticate_user(users, form_data.username, form_data.password)
     if not user:
         raise HTTPException(
@@ -186,11 +208,13 @@ async def login_for_access_token(
 async def read_users_me(
         current_user: Annotated[User, Depends(get_current_active_user)]
 ):
+    # Ruta para obtener la información del usuario actual
     return current_user
 
 
 @app.post("/auth/register", response_model=User)
 async def create_user(user: User):
+    # Ruta para registrar un nuevo usuario
     if get_user(users, user.username) is not None or get_user(users, user.email) is not None:
         raise HTTPException(status_code=400, detail="Username already registered")
     user = user.dict()
@@ -204,11 +228,13 @@ async def create_user(user: User):
 
 @app.get("/users/")
 async def read_users():
+    # Ruta para obtener la lista de usuarios
     list_users = list(users.find({"disabled": False}, {"hashed_password": 0}))
     return list_users
 
 @app.put("/users/")
 async def update_user(user: User):
+    # Ruta para actualizar la información de un usuario
     if get_user(users, user.username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     user = user.dict()
@@ -218,6 +244,7 @@ async def update_user(user: User):
 
 @app.delete("/users/{username}")
 async def delete_user(username: str):
+    # Ruta para eliminar un usuario
     if get_user(users, username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     users.delete_one({"username": username})
@@ -225,6 +252,7 @@ async def delete_user(username: str):
 
 @app.delete("/users/block/{username}")
 async def block_user(username: str):
+    # Ruta para bloquear a un usuario
     if get_user(users, username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     users.update_one({"username": username}, {"$set": {"disabled": True}})
@@ -232,15 +260,16 @@ async def block_user(username: str):
 
 @app.delete("/users/unblock/{username}")
 async def unblock_user(username: str):
+    # Ruta para desbloquear a un usuario
     if get_user(users, username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     users.update_one({"username": username}, {"$set": {"disabled": False}})
     return {"message": "User unblocked successfully"}
 
 
-
 @app.get("/users/{username}")
 async def read_user(username: str):
+    # Ruta para obtener la información de un usuario por nombre de usuario
     user = get_user(users, username)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -252,6 +281,7 @@ async def read_user(username: str):
 async def read_users_noChat(
         current_user: Annotated[User, Depends(get_current_active_user)]
 ):
+    # Ruta para obtener la lista de usuarios sin chat con el usuario actual
     list_users = list(users.find({"disabled": False}, {"hashed_password": 0}))
     list_users_noChat = []
     for user in list_users:
@@ -263,6 +293,7 @@ async def read_users_noChat(
 async def read_chats(
         current_user: Annotated[User, Depends(get_current_active_user)]
 ):
+    # Ruta para obtener la lista de chats del usuario actual
     list_chats = list(chats.aggregate([
         {"$match": {"$or": [{"usernameFrom": current_user.username}, {"usernameTo": current_user.username}]}},
     ]))
@@ -273,6 +304,7 @@ async def create_chat(
         chat: Chat,
         current_user: Annotated[User, Depends(get_current_active_user)]
 ):
+    # Ruta para crear un nuevo chat
     if existChatBetween(chats, current_user.username, chat.usernameTo):
         raise HTTPException(status_code=400, detail="Chat already exists")
     chat = chat.dict()
@@ -291,31 +323,28 @@ async def create_chat_message(
         chatId: str,
         current_user: Annotated[User, Depends(get_current_active_user)]
 ):
+    # Ruta para enviar un mensaje en un chat
     chatMessage = chatMessage.dict()
     chatMessage["username"] = current_user.username
     chatMessage["_id"] = str(uuid.uuid4())
-    # get a date in the format: 2021-05-30 18:00:00
     now = datetime.now()
-    # Formatea la fecha y hora según tu especificación
     formatted_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-    # Asigna el timestamp al diccionario
     chatMessage["timestamp"] = formatted_timestamp
-    #key = await getKey(chats, chatId)
-    #chatMessage["message"] = cifradoCesar(key, chatMessage["message"])
     chats.update_one({"_id": chatId}, {"$push": {"messages": chatMessage}})
     return chatMessage
 
 
 async def get_database():
+    # Obtiene la instancia de la base de datos asíncrona
     client = AsyncIOMotorClient(MONGO_URI)
     db = client[DATABASE_NAME]
     return db
 
 
 async def listen_to_changes(username, db: AsyncIOMotorDatabase = Depends(get_database)):
+    # Función asíncrona para escuchar cambios en la base de datos
     timestamp = None
     while True:
-        # Realiza una consulta para verificar cambios
         result = await db[COLLECTION_NAME].aggregate([
             {"$match": {"$or": [{"usernameFrom": username}, {"usernameTo": username}]}},
         ]).to_list(length=1000)
@@ -328,6 +357,7 @@ async def listen_to_changes(username, db: AsyncIOMotorDatabase = Depends(get_dat
 
 @app.websocket("/ws/chat/")
 async def websocket_endpoint(websocket: WebSocket, db: AsyncIOMotorDatabase = Depends(get_database)):
+    # Ruta WebSocket para manejar eventos en tiempo real
     await websocket.accept()
     username = ""
     while True:
@@ -346,11 +376,12 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncIOMotorDatabase = De
             await websocket.receive_text()
 
     asyncio.ensure_future(listen_to_changes(username, db))
+
+
 @app.get("/")
 async def get():
-    #redirect to the docs
+    # Ruta principal que redirige a la documentación
     return RedirectResponse(url='/docs')
-
 
 
 if __name__ == "__main__":
